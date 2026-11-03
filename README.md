@@ -75,6 +75,18 @@ quarto render
 O relatório R usa `knitr`. O relatório Python usa o kernel Jupyter configurado
 no ambiente virtual do projeto.
 
+## Testar o DataJud
+
+Com o R disponível no `PATH`, execute:
+
+```powershell
+Rscript R/testar_datajud.R
+```
+
+O teste consulta apenas um registro público do TJSP usando a classe TPU `7`
+(Procedimento Comum Cível) e o assunto `12495` (Não padronizado). Nenhum dado
+processual é salvo pelo teste.
+
 ## Credencial do GitHub
 
 O token permanece somente nos arquivos locais `.env` e `.Renviron`, que estão

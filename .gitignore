@@ -9,6 +9,7 @@ __pycache__/
 .Rproj.user/
 _site/
 .quarto/
+_freeze/
 .jupyter/
 renv/library/
 renv/staging/
