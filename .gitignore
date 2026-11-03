@@ -19,6 +19,7 @@ dados/tratados/*
 !dados/tratados/.gitkeep
 resultados/python/*
 resultados/r/*
+resultados/validacao/*
 !resultados/python/.gitkeep
 !resultados/r/.gitkeep
 
