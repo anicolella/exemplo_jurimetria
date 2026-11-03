@@ -87,6 +87,17 @@ O teste consulta apenas um registro público do TJSP usando a classe TPU `7`
 (Procedimento Comum Cível) e o assunto `12495` (Não padronizado). Nenhum dado
 processual é salvo pelo teste.
 
+## Coletar o recorte completo do TJSP
+
+```powershell
+Rscript R/coletar_tjsp.R
+```
+
+O script coleta de forma retomável todos os processos do TJSP com classe TPU
+`7` e assunto `12495`, preserva a extração em NDJSON e cria bases tratadas com
+ajuizamento a partir de 01/01/2022. Os dados ficam em `dados/brutos/` e
+`dados/tratados/`, fora do Git.
+
 ## Credencial do GitHub
 
 O token permanece somente nos arquivos locais `.env` e `.Renviron`, que estão
