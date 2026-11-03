@@ -1,0 +1,461 @@
+---
+title: "Tempo até a primeira decisão sobre tutela de urgência"
+subtitle: "Medicamentos não padronizados no TJSP antes e depois do Tema 1234 do STF"
+author: "Projeto exemplo_jurimetria"
+date: last-modified
+engine: knitr
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Mostrar código"
+    smooth-scroll: true
+    fig-width: 9
+    fig-height: 5.5
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: configuracao
+#| include: false
+
+raiz <- normalizePath("..")
+fonte <- file.path(raiz, "dados", "tratados")
+
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(purrr)
+library(scales)
+library(survival)
+library(cmprsk)
+
+theme_set(
+  theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", colour = "#17324d"),
+      plot.subtitle = element_text(colour = "#5d6b78"),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
+    )
+)
+
+cores_periodo <- c("Antes" = "#277da1", "Depois" = "#f8961e")
+marco_tema <- as.Date("2024-09-19")
+fim_estudo <- as.POSIXct("2026-11-03 23:59:59", tz = "UTC")
+
+processos <- readRDS(file.path(fonte, "processos_tjsp_2022_mais.rds"))
+movimentos <- readRDS(file.path(fonte, "movimentos_tjsp_2022_mais.rds"))
+
+codigos_tutela <- c(332L, 339L, 785L, 792L, 889L, 892L)
+codigos_concorrentes <- c(
+  83L, 218L, 268L, 454L, 456L, 459L, 460L, 463L, 464L,
+  488L, 11013L, 11380L, 12325L
+)
+
+primeira_tutela <- movimentos |>
+  filter(movimento_codigo %in% codigos_tutela) |>
+  mutate(
+    resultado_tutela = case_when(
+      movimento_codigo %in% c(332L, 339L) ~ "Concedida",
+      movimento_codigo %in% c(889L, 892L) ~ "Parcialmente concedida",
+      movimento_codigo %in% c(785L, 792L) ~ "Não concedida"
+    )
+  ) |>
+  arrange(id, movimento_data) |>
+  group_by(id) |>
+  slice_head(n = 1) |>
+  ungroup() |>
+  select(id, data_tutela = movimento_data, resultado_tutela)
+
+primeiro_concorrente <- movimentos |>
+  filter(movimento_codigo %in% codigos_concorrentes) |>
+  arrange(id, movimento_data) |>
+  group_by(id) |>
+  slice_head(n = 1) |>
+  ungroup() |>
+  select(id, data_concorrente = movimento_data,
+         evento_concorrente = movimento_nome)
+
+base <- processos |>
+  select(id, data_ajuizamento, data_atualizacao, orgao_julgador_nome) |>
+  left_join(primeira_tutela, by = "id") |>
+  left_join(primeiro_concorrente, by = "id") |>
+  mutate(
+    data_ajuizamento_dia = as.Date(data_ajuizamento),
+    periodo = factor(
+      if_else(data_ajuizamento_dia > marco_tema, "Depois", "Antes"),
+      levels = c("Antes", "Depois")
+    ),
+    status = case_when(
+      !is.na(data_tutela) &
+        (is.na(data_concorrente) | data_tutela <= data_concorrente) ~ 1L,
+      !is.na(data_concorrente) &
+        (is.na(data_tutela) | data_concorrente < data_tutela) ~ 2L,
+      TRUE ~ 0L
+    ),
+    data_final = case_when(
+      status == 1L ~ data_tutela,
+      status == 2L ~ data_concorrente,
+      TRUE ~ fim_estudo
+    ),
+    tempo_dias = pmax(
+      0, as.numeric(difftime(data_final, data_ajuizamento, units = "days"))
+    ),
+    evento_km = as.integer(status == 1L)
+  )
+
+stopifnot(nrow(base) == 802L, !anyDuplicated(base$id))
+stopifnot(all(base$tempo_dias >= 0))
+
+n_total <- nrow(base)
+n_antes <- sum(base$periodo == "Antes")
+n_depois <- sum(base$periodo == "Depois")
+n_tutela <- sum(base$status == 1L)
+n_concorrente <- sum(base$status == 2L)
+```
+
+## Resumo executivo
+
+<div class="metric-grid">
+  <div class="metric-card"><div class="value">`r format(n_total, big.mark = ".", decimal.mark = ",")`</div><div class="label">processos analisados</div></div>
+  <div class="metric-card"><div class="value">`r format(n_antes, big.mark = ".", decimal.mark = ",")`</div><div class="label">antes do Tema 1234</div></div>
+  <div class="metric-card"><div class="value">`r format(n_depois, big.mark = ".", decimal.mark = ",")`</div><div class="label">depois do Tema 1234</div></div>
+  <div class="metric-card"><div class="value">`r percent(n_tutela / n_total, accuracy = 0.1, decimal.mark = ",")`</div><div class="label">com decisão de tutela observada</div></div>
+</div>
+
+Este relatório acompanha processos de procedimento comum cível do TJSP, com
+assunto TPU 12495 — medicamento não padronizado — ajuizados desde 01/01/2022.
+O desfecho é a primeira decisão tabelada sobre tutela ou liminar.
+
+::: {.callout-important}
+## Interpretação do antes e depois
+
+O marco principal é 19/09/2024, data de publicação da ata do julgamento do
+Tema 1234. A comparação é observacional. Após o julgamento, parte das demandas
+pode ter migrado para a Justiça Federal; diferenças no TJSP podem refletir
+mudança na composição dos casos, e não somente na velocidade da decisão.
+:::
+
+## Construção da coorte
+
+```{r}
+#| label: tabela-coorte
+
+fluxo <- tibble::tibble(
+  Etapa = c(
+    "Registros únicos no recorte completo",
+    "Ajuizados desde 01/01/2022",
+    "Decisão de tutela antes de evento concorrente",
+    "Evento concorrente antes da tutela",
+    "Censurados ao fim do estudo"
+  ),
+  Processos = c(
+    nrow(readRDS(file.path(fonte, "processos_tjsp_todos.rds"))),
+    n_total, n_tutela, n_concorrente, sum(base$status == 0L)
+  )
+)
+kable(fluxo, align = c("l", "r"), format.args = list(big.mark = "."))
+```
+
+### Definição dos eventos
+
+- **Evento principal:** primeira concessão, concessão parcial ou não concessão
+  de tutela/liminar, identificada pelos códigos TPU 332, 339, 785, 792, 889 e
+  892.
+- **Eventos concorrentes:** desistência, perda do objeto, extinção sem mérito,
+  cancelamento, morte/incapacidade e outras formas específicas de encerramento
+  que ocorram antes da tutela.
+- **Censura administrativa:** 03/11/2026, quando não há evento observado.
+
+## Perfil temporal dos ajuizamentos
+
+```{r}
+#| label: figura-ajuizamentos
+#| fig-cap: "Ajuizamentos mensais no recorte analisado."
+
+mensal <- base |>
+  mutate(mes = as.Date(cut(data_ajuizamento_dia, "month"))) |>
+  count(mes)
+
+ggplot(mensal, aes(mes, n)) +
+  geom_col(fill = "#277da1", width = 25) +
+  geom_vline(xintercept = marco_tema, colour = "#f8961e", linewidth = 1) +
+  annotate("text", x = marco_tema, y = Inf, label = "Tema 1234",
+           vjust = 1.5, hjust = -0.1, colour = "#b86600", fontface = "bold") +
+  labs(x = NULL, y = "Processos", title = "Volume mensal de processos") +
+  scale_x_date(date_breaks = "6 months", date_labels = "%b/%Y")
+```
+
+## Kaplan–Meier
+
+A curva de Kaplan–Meier estima a probabilidade de permanecer sem decisão de
+tutela. Eventos concorrentes são censurados nesta análise; por isso, a
+incidência cumulativa apresentada adiante é a medida principal de risco
+absoluto.
+
+```{r}
+#| label: modelo-km
+#| include: false
+
+ajuste_km <- survfit(Surv(tempo_dias, evento_km) ~ periodo, data = base)
+resumo_km <- summary(ajuste_km)
+curva_km <- tibble::tibble(
+  tempo = resumo_km$time,
+  sobrevivencia = resumo_km$surv,
+  inferior = resumo_km$lower,
+  superior = resumo_km$upper,
+  periodo = sub("periodo=", "", resumo_km$strata)
+)
+teste_logrank <- survdiff(Surv(tempo_dias, evento_km) ~ periodo, data = base)
+p_logrank <- pchisq(teste_logrank$chisq, df = 1, lower.tail = FALSE)
+```
+
+```{r}
+#| label: figura-km
+#| fig-cap: "Kaplan–Meier: probabilidade de permanecer sem decisão de tutela."
+
+ggplot(curva_km, aes(tempo, sobrevivencia, colour = periodo, fill = periodo)) +
+  geom_ribbon(aes(ymin = inferior, ymax = superior), alpha = 0.13, colour = NA) +
+  geom_step(linewidth = 1) +
+  coord_cartesian(xlim = c(0, 365)) +
+  scale_colour_manual(values = cores_periodo, name = NULL) +
+  scale_fill_manual(values = cores_periodo, name = NULL) +
+  scale_y_continuous(labels = percent_format(decimal.mark = ",")) +
+  labs(
+    x = "Dias desde o ajuizamento",
+    y = "Probabilidade de permanecer sem decisão",
+    title = "Tempo até a primeira decisão de tutela",
+    subtitle = paste0("Teste de log-rank: p = ", format.pval(p_logrank, digits = 3))
+  )
+```
+
+### Processos em risco e probabilidade de decisão
+
+```{r}
+#| label: tabela-risco
+
+tempos_interesse <- c(7, 15, 30, 60, 90, 180, 365)
+tabela_risco <- map_dfr(levels(base$periodo), function(grupo) {
+  dados_grupo <- filter(base, periodo == grupo)
+  ajuste_grupo <- survfit(Surv(tempo_dias, evento_km) ~ 1, data = dados_grupo)
+  tibble::tibble(
+    Período = grupo,
+    Dia = tempos_interesse,
+    `Em risco` = map_int(tempos_interesse, ~ sum(dados_grupo$tempo_dias >= .x)),
+    `Decisão acumulada (KM)` = map_dbl(tempos_interesse, function(t) {
+      1 - summary(ajuste_grupo, times = t, extend = TRUE)$surv
+    })
+  )
+}) |>
+  mutate(`Decisão acumulada (KM)` = percent(
+    `Decisão acumulada (KM)`, accuracy = 0.1, decimal.mark = ","
+  ))
+kable(tabela_risco, align = c("l", "r", "r", "r"))
+```
+
+## Incidência cumulativa e riscos concorrentes
+
+```{r}
+#| label: modelo-cif
+#| include: false
+
+ajuste_cif <- cuminc(
+  ftime = base$tempo_dias,
+  fstatus = base$status,
+  group = base$periodo,
+  cencode = 0
+)
+
+curva_cif <- imap_dfr(ajuste_cif, function(objeto, nome) {
+  if (!is.list(objeto) || !all(c("time", "est", "var") %in% names(objeto))) {
+    return(tibble::tibble())
+  }
+  partes <- strsplit(nome, " ")[[1]]
+  causa <- tail(partes, 1)
+  grupo <- paste(head(partes, -1), collapse = " ")
+  tibble::tibble(
+    tempo = objeto$time,
+    estimativa = objeto$est,
+    periodo = grupo,
+    evento = ifelse(causa == "1", "Tutela", "Evento concorrente")
+  )
+})
+p_gray_tutela <- if (!is.null(ajuste_cif$Tests)) ajuste_cif$Tests[1, "pv"] else NA_real_
+```
+
+```{r}
+#| label: figura-cif
+#| fig-cap: "Incidência cumulativa da tutela e dos eventos concorrentes."
+
+ggplot(filter(curva_cif, tempo <= 365),
+       aes(tempo, estimativa, colour = periodo, linetype = evento)) +
+  geom_step(linewidth = 1) +
+  scale_colour_manual(values = cores_periodo, name = "Período") +
+  scale_linetype_manual(
+    values = c("Tutela" = "solid", "Evento concorrente" = "dashed"),
+    name = "Evento"
+  ) +
+  scale_y_continuous(labels = percent_format(decimal.mark = ",")) +
+  labs(
+    x = "Dias desde o ajuizamento",
+    y = "Incidência cumulativa",
+    title = "Probabilidade absoluta dos eventos ao longo do tempo",
+    subtitle = paste0("Teste de Gray para tutela: p = ",
+                      format.pval(p_gray_tutela, digits = 3))
+  )
+```
+
+### Probabilidade absoluta da decisão
+
+```{r}
+#| label: tabela-cif
+
+obter_cif <- function(grupo, dia) {
+  curva <- curva_cif |>
+    filter(periodo == grupo, evento == "Tutela", tempo <= dia) |>
+    arrange(tempo)
+  if (nrow(curva) == 0) return(0)
+  tail(curva$estimativa, 1)
+}
+
+tabela_cif <- tidyr::expand_grid(
+  Período = levels(base$periodo),
+  Dia = c(7, 15, 30, 60, 90, 180, 365)
+) |>
+  mutate(
+    `Incidência cumulativa` = map2_dbl(Período, Dia, obter_cif),
+    `Incidência cumulativa` = percent(
+      `Incidência cumulativa`, accuracy = 0.1, decimal.mark = ","
+    )
+  )
+kable(tabela_cif, align = c("l", "r", "r"))
+```
+
+## Modelos de regressão
+
+```{r}
+#| label: modelos-regressao
+#| include: false
+
+modelo_cox <- coxph(Surv(tempo_dias, status == 1L) ~ periodo,
+                    data = base, ties = "efron")
+coef_cox <- coef(modelo_cox)[[1]]
+se_cox <- sqrt(vcov(modelo_cox)[1, 1])
+
+matriz_fg <- model.matrix(~ periodo, data = base)[, -1, drop = FALSE]
+modelo_fg <- crr(
+  ftime = base$tempo_dias, fstatus = base$status, cov1 = matriz_fg,
+  failcode = 1, cencode = 0
+)
+coef_fg <- modelo_fg$coef[[1]]
+se_fg <- sqrt(modelo_fg$var[1, 1])
+
+resultados_modelos <- tibble::tibble(
+  Modelo = c("Cox de causa específica", "Fine–Gray"),
+  Estimativa = exp(c(coef_cox, coef_fg)),
+  Inferior = exp(c(coef_cox - 1.96 * se_cox, coef_fg - 1.96 * se_fg)),
+  Superior = exp(c(coef_cox + 1.96 * se_cox, coef_fg + 1.96 * se_fg)),
+  p = c(
+    summary(modelo_cox)$coefficients[1, "Pr(>|z|)"],
+    2 * pnorm(-abs(coef_fg / se_fg))
+  )
+)
+teste_ph <- cox.zph(modelo_cox)
+p_ph <- teste_ph$table[1, "p"]
+```
+
+```{r}
+#| label: tabela-modelos
+
+resultados_modelos |>
+  transmute(
+    Modelo,
+    `Razão de riscos` = sprintf("%.2f (IC95%% %.2f–%.2f)",
+      Estimativa, Inferior, Superior),
+    `Valor-p` = format.pval(p, digits = 3)
+  ) |>
+  kable(align = c("l", "c", "r"))
+```
+
+Valores acima de 1 indicam maior velocidade ou incidência da decisão no período
+posterior; valores abaixo de 1 indicam menor velocidade ou incidência.
+
+::: {.callout-tip}
+## Síntese dos modelos
+
+No período posterior ao Tema 1234, a taxa instantânea da primeira decisão foi
+`r sprintf("%.0f%%", (1 - exp(coef_cox)) * 100)` menor no modelo de Cox
+(HR `r sprintf("%.2f", exp(coef_cox))`). O modelo de Fine–Gray apresentou
+resultado semelhante (sHR `r sprintf("%.2f", exp(coef_fg))`), indicando menor
+incidência acumulada da decisão mesmo após considerar os riscos concorrentes.
+Essas associações não devem ser interpretadas automaticamente como efeito
+causal do julgamento.
+:::
+
+O teste de Schoenfeld para o período apresentou p =
+`r format.pval(p_ph, digits = 3)`. Valores pequenos sugerem violação da hipótese
+de riscos proporcionais e recomendam interpretar a razão de riscos como uma
+média ao longo do acompanhamento.
+
+```{r}
+#| label: figura-modelos
+#| fig-cap: "Associação entre o período posterior ao Tema 1234 e a decisão de tutela."
+
+ggplot(resultados_modelos, aes(Estimativa, Modelo)) +
+  geom_vline(xintercept = 1, linetype = "dashed", colour = "#7a8793") +
+  geom_errorbarh(aes(xmin = Inferior, xmax = Superior),
+                 height = 0.15, colour = "#277da1") +
+  geom_point(size = 3, colour = "#17324d") +
+  scale_x_log10() +
+  labs(x = "Razão de riscos (escala logarítmica)", y = NULL)
+```
+
+## Análise de sensibilidade
+
+```{r}
+#| label: sensibilidade
+
+base_transicao <- base |>
+  filter(data_ajuizamento_dia < marco_tema - 30 |
+           data_ajuizamento_dia > marco_tema + 30)
+cox_transicao <- coxph(Surv(tempo_dias, status == 1L) ~ periodo,
+                        data = base_transicao)
+
+sensibilidade <- tibble::tibble(
+  Análise = c("Principal", "Excluindo ±30 dias do marco"),
+  Processos = c(nrow(base), nrow(base_transicao)),
+  `HR de causa específica` = sprintf(
+    "%.2f", c(exp(coef_cox), exp(coef(cox_transicao)[[1]]))
+  )
+)
+kable(sensibilidade, align = c("l", "r", "r"))
+```
+
+## Limitações
+
+1. O estudo abrange somente o TJSP; após o Tema 1234, parte das ações pode ter
+   migrado para a Justiça Federal.
+2. A classificação depende da qualidade dos movimentos informados ao DataJud.
+3. Ausência de código específico não garante ausência de decisão de tutela.
+4. A comparação antes/depois não identifica, isoladamente, efeito causal.
+5. O período posterior é mais curto e possui menor acompanhamento potencial.
+6. Movimentos genéricos de baixa ou arquivamento não foram classificados como
+   riscos concorrentes na análise principal.
+
+## Reprodutibilidade
+
+O relatório foi produzido em Quarto com R. Dados brutos e tratados permanecem
+locais e fora do GitHub; o código de coleta, validação e análise é versionado.
+
+::: {.callout-note}
+## Nota metodológica
+
+Kaplan–Meier trata eventos concorrentes como censura. A incidência cumulativa de
+Aalen–Johansen estima a probabilidade observável da decisão na presença desses
+eventos e, por isso, é a medida principal de risco absoluto.
+:::

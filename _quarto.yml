@@ -4,6 +4,7 @@ project:
   render:
     - index.qmd
     - R/analise.qmd
+    - R/relatorio.qmd
     - python/analise.qmd
 
 website:
@@ -14,12 +15,15 @@ website:
         text: Início
       - href: R/analise.qmd
         text: Análise em R
+      - href: R/relatorio.qmd
+        text: Relatório de sobrevivência
       - href: python/analise.qmd
         text: Análise em Python
 
 format:
   html:
     theme: cosmo
+    css: styles.css
     toc: true
     lang: pt-BR
 

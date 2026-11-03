@@ -75,6 +75,13 @@ quarto render
 O relatório R usa `knitr`. O relatório Python usa o kernel Jupyter configurado
 no ambiente virtual do projeto.
 
+O relatório principal de sobrevivência está em `R/relatorio.qmd`. Para
+renderizá-lo isoladamente:
+
+```powershell
+quarto render R/relatorio.qmd
+```
+
 ## Testar o DataJud
 
 Com o R disponível no `PATH`, execute:

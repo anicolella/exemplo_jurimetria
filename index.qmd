@@ -20,6 +20,7 @@ do STF.
 
 ## Implementações
 
+- [Relatório de sobrevivência](R/relatorio.qmd)
 - [Análise em R](R/analise.qmd)
 - [Análise em Python](python/analise.qmd)
 
