@@ -1,0 +1,28 @@
+project:
+  type: website
+  output-dir: _site
+  render:
+    - index.qmd
+    - R/analise.qmd
+    - python/analise.qmd
+
+website:
+  title: "exemplo_jurimetria"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Início
+      - href: R/analise.qmd
+        text: Análise em R
+      - href: python/analise.qmd
+        text: Análise em Python
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    lang: pt-BR
+
+execute:
+  freeze: auto
+  warning: false
