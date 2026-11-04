@@ -25,10 +25,23 @@
 #   produzir o mesmo arquivo quando executado sobre os mesmos dados brutos e a
 #   mesma configuração. A saída somente é gravada após todas as validações.
 #
-# Decisões que devem ser validadas antes do primeiro uso:
-#   1. códigos dos movimentos que identificam a decisão de tutela;
-#   2. códigos dos movimentos tratados como riscos concorrentes;
-#   3. data administrativa de encerramento do acompanhamento.
+# Decisões metodológicas registradas neste script:
+#   1. a coorte é formada por processos da classe 7 e do assunto 12495;
+#   2. a unidade de análise é o processo, e não cada movimento processual;
+#   3. o tempo começa na data de ajuizamento informada pelo DataJud;
+#   4. o evento de interesse é a primeira decisão sobre tutela, reunindo
+#      concessão, concessão parcial e não concessão;
+#   5. encerramentos sem uma decisão anterior de tutela são riscos concorrentes;
+#   6. mera suspensão do processo não é tratada como risco concorrente;
+#   7. processos sem evento são censurados em uma data administrativa fixa;
+#   8. a comparação antes/depois usa a data de ajuizamento e 19/09/2024 como
+#      marco do Tema 1234;
+#   9. em duplicidades, conserva-se o registro processual mais atualizado;
+#  10. nenhuma saída é salva quando uma verificação de consistência falha.
+#
+# Decisão ainda pendente:
+#   - preencher `fim_observacao` com a data efetiva e documentada de fechamento
+#     da coleta. O script para deliberadamente enquanto essa data for `NA`.
 # ==============================================================================
 
 # 1. Configuração -------------------------------------------------------------
@@ -52,10 +65,25 @@ data_inicial <- as.POSIXct("2022-01-01 00:00:00", tz = "UTC")
 # depois, preservando o código original do movimento.
 codigos_evento_tutela <- c(332L, 339L, 785L, 792L, 889L, 892L)
 
+# Significado dos códigos de tutela na TPU/CNJ:
+#   332 = concessão de tutela provisória;
+#   339 = concessão de liminar;
+#   785 = não concessão de tutela provisória;
+#   792 = não concessão de liminar;
+#   889 = concessão parcial de tutela provisória;
+#   892 = concessão parcial de liminar.
+# A agregação responde primeiro à pergunta "houve decisão sobre a tutela?".
+# O código e o nome originais permanecem na base para análises posteriores do
+# conteúdo da decisão (concedida, negada ou parcialmente concedida).
+
 # Riscos concorrentes: encerramentos que impedem a observação posterior de uma
 # decisão de tutela no processo. Incluem acordo/transação, cancelamento da
 # distribuição e extinção sem resolução do mérito. Movimentos de suspensão,
 # como os códigos 268 e 11013, não são eventos terminais e foram excluídos.
+# Os códigos-pai 218 (sem resolução do mérito) e 456 (extinção), assim como
+# seus subtipos relevantes, foram mantidos porque tribunais podem registrar o
+# movimento em diferentes níveis da hierarquia da TPU. Eventuais repetições
+# são resolvidas pela escolha cronológica do primeiro evento do processo.
 codigos_riscos_concorrentes <- c(
   83L, 218L, 454L, 456L, 458L, 459L, 460L, 461L, 462L, 463L, 464L,
   466L, 488L, 11376L, 11378L, 11379L, 11380L, 11381L, 12256L, 12325L,
@@ -83,6 +111,8 @@ informar_etapa <- function(numero, texto) {
   message(sprintf("[%s] Etapa %02d - %s", horario, numero, texto))
 }
 
+# Exibe o efeito de uma transformação sobre o número de registros. Esta função
+# não altera dados; ela torna auditáveis a deduplicação e os filtros da coorte.
 informar_contagem <- function(rotulo, n_antes, n_depois) {
   message(
     sprintf(
@@ -95,10 +125,14 @@ informar_contagem <- function(rotulo, n_antes, n_depois) {
   )
 }
 
+# Interrompe a execução com uma mensagem curta, sem imprimir uma pilha de
+# chamadas. É usada quando continuar poderia produzir uma base incorreta.
 interromper <- function(texto) {
   stop(texto, call. = FALSE)
 }
 
+# Confirma que todas as dependências estão instaladas antes de ler arquivos.
+# Entrada: vetor de nomes de pacotes. Saída: invisível; erro se houver ausentes.
 verificar_pacotes <- function(pacotes) {
   ausentes <- pacotes[
     !vapply(pacotes, requireNamespace, logical(1), quietly = TRUE)
@@ -114,6 +148,9 @@ verificar_pacotes <- function(pacotes) {
   }
 }
 
+# Valida decisões metodológicas que precisam estar definidas antes do uso.
+# Também impede que um mesmo código seja simultaneamente evento de tutela e
+# risco concorrente. Não lê nem modifica a base.
 verificar_configuracao <- function() {
   if (length(codigos_evento_tutela) == 0L) {
     interromper(
@@ -152,6 +189,9 @@ verificar_configuracao <- function() {
   }
 }
 
+# Confirma a existência das três coletas e de seus manifestos. O manifesto é
+# usado como evidência de que a etapa de coleta foi registrada; sua presença
+# não substitui a checagem de estado completo feita em `ler_tribunal()`.
 verificar_entradas <- function() {
   diretorios <- file.path(diretorio_bruto, tolower(tribunais))
   manifestos <- file.path(diretorios, "manifesto.json")
@@ -181,6 +221,8 @@ verificar_entradas <- function() {
 # movimentos. Por isso, cada página é lida uma vez e usada para construir duas
 # tabelas: processos e movimentos.
 
+# Retorna uma tabela vazia com tipos estáveis. Isso permite combinar processos
+# sem movimentos com os demais sem criar colunas de tipos inconsistentes.
 movimentos_vazios <- function() {
   tibble::tibble(
     tribunal = character(),
@@ -193,6 +235,10 @@ movimentos_vazios <- function() {
   )
 }
 
+# Converte os movimentos aninhados de um único resultado (`hit`) em uma tabela
+# longa: uma linha por movimento. `tribunal_esperado` vem do diretório lido e
+# evita depender de eventual ausência ou inconsistência desse campo no hit.
+# Os complementos são preservados como JSON para não perder informação bruta.
 extrair_movimentos_hit <- function(hit, tribunal_esperado) {
   fonte <- hit[["_source"]]
   movimentos <- fonte[["movimentos"]]
@@ -222,6 +268,9 @@ extrair_movimentos_hit <- function(hit, tribunal_esperado) {
   })
 }
 
+# Lê integralmente a coleta de um tribunal e retorna uma lista com duas tabelas:
+# `processos` (uma linha por registro processual lido) e `movimentos` (formato
+# longo). A função recusa coletas incompletas para impedir análises parciais.
 ler_tribunal <- function(tribunal) {
   diretorio <- file.path(diretorio_bruto, tolower(tribunal))
   coleta <- datajud::datajud_abrir_coleta(diretorio)
@@ -255,6 +304,10 @@ ler_tribunal <- function(tribunal) {
 
 # 4. Padronização e deduplicação ---------------------------------------------
 
+# Padroniza identificadores e datas e remove duplicidades de processos.
+# Decisão: a chave é `tribunal + id`; quando a mesma chave aparece mais de uma
+# vez, conserva-se o registro com a `data_atualizacao` mais recente.
+# Registros atribuídos a tribunal diferente do diretório lido são descartados.
 padronizar_processos <- function(processos, tribunal_esperado) {
   processos |>
     dplyr::mutate(
@@ -269,6 +322,9 @@ padronizar_processos <- function(processos, tribunal_esperado) {
     dplyr::distinct(tribunal, id, .keep_all = TRUE)
 }
 
+# Padroniza a tabela longa de movimentos e remove repetições exatas pela chave
+# tribunal, processo, código, data e nome. Movimentos distintos na mesma data
+# são preservados quando possuem código ou nome diferentes.
 padronizar_movimentos <- function(movimentos) {
   movimentos |>
     dplyr::mutate(
@@ -286,6 +342,9 @@ padronizar_movimentos <- function(movimentos) {
 
 # 5. Critérios de inclusão e exclusão ----------------------------------------
 
+# Verifica se a lista de assuntos de um processo contém o código solicitado.
+# Ausência de assuntos é interpretada como não elegibilidade, e não como prova
+# de que o processo pertence ao assunto pesquisado.
 possui_assunto <- function(assuntos, codigo) {
   if (is.null(assuntos) || nrow(assuntos) == 0L) {
     return(FALSE)
@@ -293,6 +352,9 @@ possui_assunto <- function(assuntos, codigo) {
   any(assuntos$codigo == codigo, na.rm = TRUE)
 }
 
+# Aplica critérios em ordem explícita e atribui um único motivo principal de
+# exclusão a cada processo. Retorna `base`, com os elegíveis, e `fluxo`, tabela
+# de auditoria com as contagens de inclusão e exclusão.
 aplicar_criterios <- function(processos) {
   avaliacao <- processos |>
     dplyr::mutate(
@@ -324,6 +386,21 @@ aplicar_criterios <- function(processos) {
 
 # 6. Construção dos eventos analíticos ---------------------------------------
 
+# Constrói as variáveis da análise de sobrevivência e riscos concorrentes.
+#
+# Para cada processo, ordena cronologicamente todos os movimentos de interesse
+# e conserva somente o primeiro. Assim, uma decisão de tutela anterior a uma
+# extinção é evento de tutela; uma extinção anterior impede observar tutela e é
+# risco concorrente. Processos sem ambos são censurados em `fim_observacao`.
+#
+# Codificação do desfecho:
+#   0 = censura administrativa;
+#   1 = primeira decisão sobre tutela;
+#   2 = risco concorrente anterior à decisão de tutela.
+#
+# `tempo_dias` é contado do ajuizamento até evento ou censura. A variável
+# `periodo_tema_1234` descreve quando o processo foi ajuizado; ela não altera o
+# relógio, o evento nem a data de censura.
 construir_eventos <- function(processos, movimentos) {
   movimentos_interesse <- movimentos |>
     dplyr::filter(
@@ -371,6 +448,9 @@ construir_eventos <- function(processos, movimentos) {
 
 # 7. Verificações de consistência --------------------------------------------
 
+# Executa verificações mínimas antes de salvar a base. A função acumula todos
+# os problemas encontrados para que a correção não dependa de sucessivas
+# execuções. Retorna invisivelmente `TRUE` apenas quando a base é consistente.
 validar_base <- function(base) {
   problemas <- character()
 

@@ -22,6 +22,14 @@
 #   - páginas já concluídas não devem ser baixadas novamente;
 #   - este script não trata nem combina os dados;
 #   - este script não deve ser executado pelo relatório Quarto.
+#
+# ATENÇÃO — compatibilidade pendente:
+#   A versão local do pacote `datajud` (0.1.0) não exporta atualmente as
+#   funções `datajud_coletar_processos()` e `datajud_cliente()` usadas abaixo.
+#   Portanto, este arquivo registra o desenho pretendido da coleta, mas não
+#   deve ser executado até sua adaptação e validação por uma consulta mínima em
+#   cada tribunal. Essa pendência é explícita para evitar uma falsa impressão
+#   de que o coletor já está operacional.
 # ==============================================================================
 
 # 1. Configuração -------------------------------------------------------------
@@ -31,6 +39,10 @@ pacotes_necessarios <- c("datajud")
 tribunais <- c("TJSP", "TJMT", "TJSC")
 classe_codigo <- 7L
 assunto_codigo <- 12495L
+
+# Decisão de escopo: a mesma consulta será aplicada separadamente aos três
+# tribunais. A separação física permite auditar diferenças de cobertura e
+# retomar apenas o tribunal interrompido.
 
 # Tamanho de cada página solicitada ao DataJud.
 tamanho_pagina <- 1000L
