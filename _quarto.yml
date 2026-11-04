@@ -8,7 +8,7 @@ project:
     - python/analise.qmd
 
 website:
-  title: "exemplo-R"
+  title: "exemplo_jurimetria"
   navbar:
     left:
       - href: index.qmd

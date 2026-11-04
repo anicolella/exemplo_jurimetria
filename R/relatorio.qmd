@@ -1,7 +1,7 @@
 ---
 title: "Tempo até a primeira decisão sobre tutela de urgência"
 subtitle: "Medicamentos não padronizados no TJSP antes e depois do Tema 1234 do STF"
-author: "Projeto exemplo-R"
+author: "Projeto exemplo_jurimetria"
 date: last-modified
 engine: knitr
 format:
