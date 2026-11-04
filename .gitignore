@@ -20,6 +20,7 @@ dados/tratados/*
 resultados/python/*
 resultados/r/*
 resultados/validacao/*
+output/pdf/*
 !resultados/python/.gitkeep
 !resultados/r/.gitkeep
 

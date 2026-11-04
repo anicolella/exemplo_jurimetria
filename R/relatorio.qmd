@@ -13,6 +13,23 @@ format:
     smooth-scroll: true
     fig-width: 9
     fig-height: 5.5
+  pdf:
+    documentclass: article
+    pdf-engine: xelatex
+    papersize: a4
+    geometry:
+      - top=22mm
+      - bottom=22mm
+      - left=22mm
+      - right=22mm
+    fontsize: 10pt
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    colorlinks: true
+    fig-width: 6.4
+    fig-height: 4.2
+    fig-align: center
 execute:
   echo: false
   warning: false
@@ -121,25 +138,47 @@ n_concorrente <- sum(base$status == 2L)
 
 ## Resumo executivo
 
+::: {.content-visible when-format="html"}
 <div class="metric-grid">
   <div class="metric-card"><div class="value">`r format(n_total, big.mark = ".", decimal.mark = ",")`</div><div class="label">processos analisados</div></div>
   <div class="metric-card"><div class="value">`r format(n_antes, big.mark = ".", decimal.mark = ",")`</div><div class="label">antes do Tema 1234</div></div>
   <div class="metric-card"><div class="value">`r format(n_depois, big.mark = ".", decimal.mark = ",")`</div><div class="label">depois do Tema 1234</div></div>
   <div class="metric-card"><div class="value">`r percent(n_tutela / n_total, accuracy = 0.1, decimal.mark = ",")`</div><div class="label">com decisão de tutela observada</div></div>
 </div>
+:::
+
+::: {.content-visible when-format="pdf"}
+```{r}
+#| label: resumo-executivo-pdf
+
+tibble::tibble(
+  Indicador = c(
+    "Processos analisados",
+    "Antes do Tema 1234",
+    "Depois do Tema 1234",
+    "Com decisão de tutela observada"
+  ),
+  Valor = c(
+    format(n_total, big.mark = ".", decimal.mark = ","),
+    format(n_antes, big.mark = ".", decimal.mark = ","),
+    format(n_depois, big.mark = ".", decimal.mark = ","),
+    percent(n_tutela / n_total, accuracy = 0.1, decimal.mark = ",")
+  )
+) |>
+  kable(align = c("l", "r"), booktabs = TRUE)
+```
+:::
 
 Este relatório acompanha processos de procedimento comum cível do TJSP, com
 assunto TPU 12495 — medicamento não padronizado — ajuizados desde 01/01/2022.
 O desfecho é a primeira decisão tabelada sobre tutela ou liminar.
 
-::: {.callout-important}
-## Interpretação do antes e depois
+### Interpretação do antes e depois
 
 O marco principal é 19/09/2024, data de publicação da ata do julgamento do
 Tema 1234. A comparação é observacional. Após o julgamento, parte das demandas
 pode ter migrado para a Justiça Federal; diferenças no TJSP podem refletir
 mudança na composição dos casos, e não somente na velocidade da decisão.
-:::
 
 ## Construção da coorte
 
@@ -191,9 +230,9 @@ ggplot(mensal, aes(mes, n)) +
   scale_x_date(date_breaks = "6 months", date_labels = "%b/%Y")
 ```
 
-## Kaplan–Meier
+## Kaplan-Meier
 
-A curva de Kaplan–Meier estima a probabilidade de permanecer sem decisão de
+A curva de Kaplan-Meier estima a probabilidade de permanecer sem decisão de
 tutela. Eventos concorrentes são censurados nesta análise; por isso, a
 incidência cumulativa apresentada adiante é a medida principal de risco
 absoluto.
@@ -217,7 +256,7 @@ p_logrank <- pchisq(teste_logrank$chisq, df = 1, lower.tail = FALSE)
 
 ```{r}
 #| label: figura-km
-#| fig-cap: "Kaplan–Meier: probabilidade de permanecer sem decisão de tutela."
+#| fig-cap: "Kaplan-Meier: probabilidade de permanecer sem decisão de tutela."
 
 ggplot(curva_km, aes(tempo, sobrevivencia, colour = periodo, fill = periodo)) +
   geom_ribbon(aes(ymin = inferior, ymax = superior), alpha = 0.13, colour = NA) +
@@ -356,7 +395,7 @@ coef_fg <- modelo_fg$coef[[1]]
 se_fg <- sqrt(modelo_fg$var[1, 1])
 
 resultados_modelos <- tibble::tibble(
-  Modelo = c("Cox de causa específica", "Fine–Gray"),
+  Modelo = c("Cox de causa específica", "Fine-Gray"),
   Estimativa = exp(c(coef_cox, coef_fg)),
   Inferior = exp(c(coef_cox - 1.96 * se_cox, coef_fg - 1.96 * se_fg)),
   Superior = exp(c(coef_cox + 1.96 * se_cox, coef_fg + 1.96 * se_fg)),
@@ -375,7 +414,7 @@ p_ph <- teste_ph$table[1, "p"]
 resultados_modelos |>
   transmute(
     Modelo,
-    `Razão de riscos` = sprintf("%.2f (IC95%% %.2f–%.2f)",
+    `Razão de riscos` = sprintf("%.2f (IC95%% %.2f-%.2f)",
       Estimativa, Inferior, Superior),
     `Valor-p` = format.pval(p, digits = 3)
   ) |>
@@ -385,17 +424,15 @@ resultados_modelos |>
 Valores acima de 1 indicam maior velocidade ou incidência da decisão no período
 posterior; valores abaixo de 1 indicam menor velocidade ou incidência.
 
-::: {.callout-tip}
-## Síntese dos modelos
+### Síntese dos modelos
 
 No período posterior ao Tema 1234, a taxa instantânea da primeira decisão foi
 `r sprintf("%.0f%%", (1 - exp(coef_cox)) * 100)` menor no modelo de Cox
-(HR `r sprintf("%.2f", exp(coef_cox))`). O modelo de Fine–Gray apresentou
+(HR `r sprintf("%.2f", exp(coef_cox))`). O modelo de Fine-Gray apresentou
 resultado semelhante (sHR `r sprintf("%.2f", exp(coef_fg))`), indicando menor
 incidência acumulada da decisão mesmo após considerar os riscos concorrentes.
 Essas associações não devem ser interpretadas automaticamente como efeito
 causal do julgamento.
-:::
 
 O teste de Schoenfeld para o período apresentou p =
 `r format.pval(p_ph, digits = 3)`. Valores pequenos sugerem violação da hipótese
@@ -427,7 +464,7 @@ cox_transicao <- coxph(Surv(tempo_dias, status == 1L) ~ periodo,
                         data = base_transicao)
 
 sensibilidade <- tibble::tibble(
-  Análise = c("Principal", "Excluindo ±30 dias do marco"),
+  Análise = c("Principal", "Excluindo +/-30 dias do marco"),
   Processos = c(nrow(base), nrow(base_transicao)),
   `HR de causa específica` = sprintf(
     "%.2f", c(exp(coef_cox), exp(coef(cox_transicao)[[1]]))
@@ -452,10 +489,8 @@ kable(sensibilidade, align = c("l", "r", "r"))
 O relatório foi produzido em Quarto com R. Dados brutos e tratados permanecem
 locais e fora do GitHub; o código de coleta, validação e análise é versionado.
 
-::: {.callout-note}
-## Nota metodológica
+### Nota metodológica
 
-Kaplan–Meier trata eventos concorrentes como censura. A incidência cumulativa de
-Aalen–Johansen estima a probabilidade observável da decisão na presença desses
+Kaplan-Meier trata eventos concorrentes como censura. A incidência cumulativa de
+Aalen-Johansen estima a probabilidade observável da decisão na presença desses
 eventos e, por isso, é a medida principal de risco absoluto.
-:::
