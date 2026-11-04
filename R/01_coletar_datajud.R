@@ -18,7 +18,8 @@
 #      percorrem corretamente todas as páginas;
 #   2. a chave pública padrão do pacote é usada quando `DATAJUD_API_KEY` não
 #      estiver definida; nenhuma chave é impressa ou salva;
-#   3. cada resposta bruta é salva como um arquivo RDS independente;
+#   3. cada página bruta é salva como Parquet. Cada linha representa um hit e
+#      preserva seu conteúdo integral em JSON, além dos identificadores básicos;
 #   4. o manifesto registra o último valor de `search_after`, permitindo retomar
 #      a coleta sem baixar novamente páginas concluídas;
 #   5. a consulta usa ordenação estável por `numeroProcesso.keyword`. O sufixo
@@ -32,15 +33,15 @@
 #      efetivamente coletada e o fim é identificado pela última página.
 #
 # Saídas:
-#   dados/brutos/tjsp/pagina_000001.rds e manifesto.json
-#   dados/brutos/tjmt/pagina_000001.rds e manifesto.json
-#   dados/brutos/tjsc/pagina_000001.rds e manifesto.json
+#   dados/brutos/tjsp/pagina_000001.parquet e manifesto.json
+#   dados/brutos/tjmt/pagina_000001.parquet e manifesto.json
+#   dados/brutos/tjsc/pagina_000001.parquet e manifesto.json
 # ==============================================================================
 
 
 # 1. Configuração -------------------------------------------------------------
 
-pacotes_necessarios <- c("datajud", "httr", "jsonlite")
+pacotes_necessarios <- c("arrow", "datajud", "httr", "jsonlite")
 
 tribunais <- c("TJSP", "TJMT", "TJSC")
 classe_codigo <- 7L
@@ -190,12 +191,41 @@ consultar_pagina <- function(
   )
 }
 
-# Grava RDS de maneira atômica: primeiro cria um arquivo temporário no mesmo
+# Converte os hits aninhados da API em uma tabela própria para Parquet. O JSON
+# integral preserva a resposta bruta sem depender de um esquema fixo, enquanto
+# as colunas auxiliares facilitam conferências sem desserializar todo o hit.
+hits_para_parquet <- function(hits, tribunal, pagina) {
+  extrair_texto <- function(hit, campo_fonte, campo_hit = NULL) {
+    valor <- hit[["_source"]][[campo_fonte]]
+    if (is.null(valor) && !is.null(campo_hit)) valor <- hit[[campo_hit]]
+    if (is.null(valor) || length(valor) == 0L) NA_character_ else as.character(valor[[1L]])
+  }
+
+  data.frame(
+    tribunal = rep(tribunal, length(hits)),
+    pagina = rep(as.integer(pagina), length(hits)),
+    id = vapply(hits, extrair_texto, character(1), campo_fonte = "id", campo_hit = "_id"),
+    numero_processo = vapply(
+      hits, extrair_texto, character(1), campo_fonte = "numeroProcesso"
+    ),
+    hit_json = vapply(
+      hits,
+      jsonlite::toJSON,
+      character(1),
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null"
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+# Grava Parquet de maneira atômica: primeiro cria um arquivo temporário no mesmo
 # diretório e só então o renomeia. Uma interrupção não deixa página parcial com
 # o nome de uma página concluída.
-salvar_rds_atomico <- function(objeto, caminho) {
+salvar_parquet_atomico <- function(tabela, caminho) {
   temporario <- paste0(caminho, ".tmp")
-  saveRDS(objeto, temporario, compress = "xz")
+  arrow::write_parquet(tabela, temporario, compression = "zstd")
   if (!file.rename(temporario, caminho)) {
     unlink(temporario)
     interromper(paste0("Não foi possível concluir a gravação de ", caminho, "."))
@@ -339,7 +369,7 @@ coletar_tribunal <- function(tribunal, chave_api) {
 
     caminho_pagina <- file.path(
       destino,
-      sprintf("pagina_%06d.rds", proxima_pagina)
+      sprintf("pagina_%06d.parquet", proxima_pagina)
     )
     if (file.exists(caminho_pagina)) {
       interromper(
@@ -350,8 +380,9 @@ coletar_tribunal <- function(tribunal, chave_api) {
       )
     }
 
-    # Salva a resposta bruta completa para preservar metadados e os hits.
-    salvar_rds_atomico(resposta, caminho_pagina)
+    # Salva todos os hits brutos; o manifesto preserva os metadados operacionais.
+    pagina_parquet <- hits_para_parquet(hits, tribunal, proxima_pagina)
+    salvar_parquet_atomico(pagina_parquet, caminho_pagina)
 
     ultimo_hit <- hits[[length(hits)]]
     if (is.null(ultimo_hit$sort)) {

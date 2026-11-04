@@ -130,7 +130,7 @@ dados/
     tjmt/
     tjsc/
   tratados/
-    base_analitica.rds
+    base_analitica.parquet
 output/                  PDF e outros arquivos gerados
 relatorio.qmd            fonte principal do relatório Quarto
 referencias.bib          referências bibliográficas
@@ -147,6 +147,11 @@ fonte.
 A coleta utilizará dados públicos do DataJud para TJSP, TJMT e TJSC. Os dados
 brutos deverão ser armazenados separadamente por tribunal. A coleta deverá ser
 retomável: arquivos já concluídos não serão baixados novamente.
+
+As páginas brutas e a base analítica consolidada deverão ser armazenadas em
+formato Parquet. Estruturas aninhadas da resposta do DataJud poderão ser
+preservadas como JSON dentro do Parquet, evitando perda de informação e
+mantendo interoperabilidade com R, Python e outras ferramentas.
 
 A coleta não deverá ser executada automaticamente durante a renderização do
 relatório Quarto.
@@ -169,7 +174,7 @@ O script deverá:
 9. preservar a identificação do tribunal;
 10. combinar os tribunais;
 11. executar verificações de consistência;
-12. salvar a base tratada em formato RDS.
+12. salvar a base tratada em formato Parquet.
 
 O script deverá produzir o mesmo banco quando executado novamente sobre os
 mesmos dados brutos. Não deverão existir transformações manuais indispensáveis
@@ -331,7 +336,7 @@ PDF ficará centralizada em `tema-moderno.tex`, sem dependência da pasta do liv
 6. Definir e validar a regra de identificação da primeira decisão de tutela.
 7. Coletar de forma retomável os dados públicos do TJSP, TJMT e TJSC, mantendo
    os arquivos brutos separados por tribunal.
-8. Executar o script integral de tratamento, deduplicar e construir a base RDS
+8. Executar o script integral de tratamento, deduplicar e construir a base Parquet
    consolidada.
 9. Classificar eventos, riscos concorrentes e censura.
 10. Executar as análises descritivas e de sobrevivência.

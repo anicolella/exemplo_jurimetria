@@ -15,7 +15,7 @@
 #   dados/brutos/tjsc/
 #
 # Saída principal:
-#   dados/tratados/base_analitica.rds
+#   dados/tratados/base_analitica.parquet
 #
 # Execução, a partir da raiz do projeto:
 #   Rscript R/02_tratar_dados.R
@@ -47,7 +47,7 @@
 # 1. Configuração -------------------------------------------------------------
 
 pacotes_necessarios <- c(
-  "datajud", "dplyr", "jsonlite", "lubridate", "purrr", "tibble"
+  "arrow", "dplyr", "jsonlite", "lubridate", "purrr", "tibble"
 )
 
 tribunais <- c("TJSP", "TJMT", "TJSC")
@@ -101,7 +101,7 @@ fim_observacao <- as.POSIXct(NA, tz = "UTC")
 
 diretorio_bruto <- file.path("dados", "brutos")
 diretorio_tratado <- file.path("dados", "tratados")
-arquivo_saida <- file.path(diretorio_tratado, "base_analitica.rds")
+arquivo_saida <- file.path(diretorio_tratado, "base_analitica.parquet")
 
 
 # 2. Funções de apoio e mensagens --------------------------------------------
@@ -217,8 +217,8 @@ verificar_entradas <- function() {
 
 # 3. Leitura dos processos e movimentos --------------------------------------
 
-# `datajud_ler_processo()` padroniza os campos gerais, mas não materializa os
-# movimentos. Por isso, cada página é lida uma vez e usada para construir duas
+# Cada página Parquet contém uma linha por hit e preserva o hit integral em
+# `hit_json`. O JSON é desserializado uma única vez e usado para construir duas
 # tabelas: processos e movimentos.
 
 # Retorna uma tabela vazia com tipos estáveis. Isso permite combinar processos
@@ -268,35 +268,89 @@ extrair_movimentos_hit <- function(hit, tribunal_esperado) {
   })
 }
 
-# Lê integralmente a coleta de um tribunal e retorna uma lista com duas tabelas:
-# `processos` (uma linha por registro processual lido) e `movimentos` (formato
-# longo). A função recusa coletas incompletas para impedir análises parciais.
+# Converte a lista de assuntos da fonte em uma pequena tabela por processo. A
+# coluna permanece como lista durante o tratamento para permitir verificar o
+# código 12495 sem perder os demais assuntos associados.
+extrair_assuntos_hit <- function(hit) {
+  assuntos <- hit[["_source"]][["assuntos"]]
+  if (is.null(assuntos) || length(assuntos) == 0L) {
+    return(tibble::tibble(codigo = integer(), nome = character()))
+  }
+
+  purrr::map_dfr(assuntos, function(assunto) {
+    tibble::tibble(
+      codigo = as.integer(assunto[["codigo"]]),
+      nome = as.character(assunto[["nome"]])
+    )
+  })
+}
+
+# Extrai os campos processuais necessários de um único hit bruto. Campos que
+# não participam da análise não são descartados na coleta: continuam íntegros
+# no `hit_json` do Parquet bruto e podem ser recuperados posteriormente.
+extrair_processo_hit <- function(hit, tribunal_esperado) {
+  fonte <- hit[["_source"]]
+  id <- fonte[["id"]]
+  if (is.null(id)) id <- hit[["_id"]]
+
+  tibble::tibble(
+    tribunal = tribunal_esperado,
+    id = as.character(id),
+    numero_processo = as.character(fonte[["numeroProcesso"]]),
+    grau = as.character(fonte[["grau"]]),
+    nivel_sigilo = as.integer(fonte[["nivelSigilo"]]),
+    data_ajuizamento = lubridate::as_datetime(
+      fonte[["dataAjuizamento"]], tz = "UTC"
+    ),
+    data_atualizacao = lubridate::as_datetime(
+      fonte[["dataHoraUltimaAtualizacao"]], tz = "UTC"
+    ),
+    classe_tpu = as.integer(fonte[["classe"]][["codigo"]]),
+    classe_nome = as.character(fonte[["classe"]][["nome"]]),
+    assuntos = list(extrair_assuntos_hit(hit))
+  )
+}
+
+# Lê integralmente os Parquets de um tribunal e retorna duas tabelas: processos
+# e movimentos. A função confere o estado e o número de páginas do manifesto e
+# recusa coletas incompletas para impedir análises parciais.
 ler_tribunal <- function(tribunal) {
   diretorio <- file.path(diretorio_bruto, tolower(tribunal))
-  coleta <- datajud::datajud_abrir_coleta(diretorio)
+  caminho_manifesto <- file.path(diretorio, "manifesto.json")
+  manifesto <- jsonlite::read_json(caminho_manifesto, simplifyVector = TRUE)
 
-  if (!identical(coleta$metadados$estado, "completa")) {
+  if (!identical(manifesto$estado, "completa")) {
     interromper(
       paste0(
         "A coleta de ", tribunal, " não está completa. Estado informado: ",
-        coleta$metadados$estado, "."
+        manifesto$estado, "."
       )
     )
   }
 
-  paginas <- lapply(
-    seq_along(coleta$arquivos),
-    function(indice) datajud::datajud_ler_pagina(coleta, indice)
-  )
-
-  processos <- purrr::map_dfr(paginas, datajud::datajud_ler_processo)
-  movimentos <- purrr::map_dfr(paginas, function(pagina) {
-    purrr::map_dfr(
-      pagina$hits,
-      extrair_movimentos_hit,
-      tribunal_esperado = tribunal
+  arquivos <- sort(list.files(
+    diretorio,
+    pattern = "^pagina_[0-9]{6}\\.parquet$",
+    full.names = TRUE
+  ))
+  if (length(arquivos) != as.integer(manifesto$paginas_concluidas)) {
+    interromper(
+      paste0(
+        tribunal, ": manifesto informa ", manifesto$paginas_concluidas,
+        " página(s), mas foram encontrados ", length(arquivos),
+        " arquivo(s) Parquet."
+      )
     )
-  })
+  }
+
+  paginas <- lapply(arquivos, arrow::read_parquet, as_data_frame = TRUE)
+  hits <- paginas |>
+    purrr::map("hit_json") |>
+    purrr::list_flatten() |>
+    purrr::map(jsonlite::fromJSON, simplifyVector = FALSE)
+
+  processos <- purrr::map_dfr(hits, extrair_processo_hit, tribunal_esperado = tribunal)
+  movimentos <- purrr::map_dfr(hits, extrair_movimentos_hit, tribunal_esperado = tribunal)
 
   list(processos = processos, movimentos = movimentos)
 }
@@ -485,6 +539,29 @@ validar_base <- function(base) {
   invisible(TRUE)
 }
 
+# Converte colunas-lista em JSON antes da gravação. Parquet funciona melhor
+# neste exemplo didático com colunas escalares; a serialização preserva o
+# conteúdo aninhado e mantém o arquivo interoperável com R e Python.
+preparar_para_parquet <- function(base) {
+  colunas_lista <- names(base)[vapply(base, is.list, logical(1))]
+  if (length(colunas_lista) == 0L) return(base)
+
+  base |>
+    dplyr::mutate(
+      dplyr::across(
+        dplyr::all_of(colunas_lista),
+        ~ vapply(
+          .x,
+          jsonlite::toJSON,
+          character(1),
+          auto_unbox = TRUE,
+          null = "null",
+          na = "null"
+        )
+      )
+    )
+}
+
 
 # 8. Execução integral --------------------------------------------------------
 
@@ -536,7 +613,8 @@ print(resumo_final, n = Inf)
 
 informar_etapa(8, "Salvando a base analítica consolidada.")
 dir.create(diretorio_tratado, recursive = TRUE, showWarnings = FALSE)
-saveRDS(base_analitica, arquivo_saida, compress = "xz")
+base_para_salvar <- preparar_para_parquet(base_analitica)
+arrow::write_parquet(base_para_salvar, arquivo_saida, compression = "zstd")
 
 message(
   "Base salva em ", arquivo_saida, " com ",
