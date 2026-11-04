@@ -1,5 +1,5 @@
 [project]
-name = "exemplo_jurimetria"
+name = "exemplo-R"
 version = "0.1.0"
 description = "Exemplo comparado de análise jurimétrica em Python e R"
 requires-python = ">=3.10"

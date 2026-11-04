@@ -1,4 +1,4 @@
-# exemplo_jurimetria
+# exemplo-R
 
 Projeto reproduzível em Quarto para estudar o tempo entre o ajuizamento e a
 primeira decisão sobre tutela de urgência em ações de fornecimento de
