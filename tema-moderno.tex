@@ -1,0 +1,37 @@
+% Adaptação para PDF da identidade visual de tema-moderno.scss.
+\definecolor{azul-marinho}{HTML}{071739}
+\definecolor{azul-medio}{HTML}{4B6382}
+\definecolor{azul-nevoa}{HTML}{A4B5C4}
+\definecolor{cinza-nuvem}{HTML}{CDD5DB}
+\definecolor{marrom-suave}{HTML}{A68868}
+\definecolor{bege}{HTML}{E3C39D}
+\definecolor{marfim}{HTML}{F8F5EF}
+\definecolor{texto}{HTML}{172033}
+
+\newfontfamily\headingfont{TeX Gyre Pagella}
+
+\AtBeginDocument{
+  \color{texto}
+  \setlength{\parindent}{0pt}
+  \setlength{\parskip}{0.55em}
+  \renewcommand{\arraystretch}{1.15}
+}
+
+\makeatletter
+\renewcommand{\maketitle}{
+  \begin{flushleft}
+    {\headingfont\color{azul-marinho}\Huge\bfseries \@title\par}
+    \vspace{0.7em}
+    \ifx\@author\@empty\else
+      {\color{azul-medio}\large \@author\par}
+    \fi
+    \ifx\@date\@empty\else
+      \vspace{0.25em}{\color{azul-medio}\@date\par}
+    \fi
+  \end{flushleft}
+  \vspace{1em}
+  {\color{azul-nevoa}\hrule height 1pt}
+  \vspace{1.5em}
+  \color{texto}
+}
+\makeatother

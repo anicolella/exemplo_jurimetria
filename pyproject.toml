@@ -1,9 +1,0 @@
-[project]
-name = "exemplo_jurimetria"
-version = "0.1.0"
-description = "Exemplo comparado de análise jurimétrica em Python e R"
-requires-python = ">=3.10"
-dependencies = [
-    "jupyter>=1.1",
-    "pyyaml>=6.0",
-]

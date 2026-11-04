@@ -20,6 +20,7 @@ Tema 1234 do STF nos processos de fornecimento de medicamento não padronizado?
 - Utilizar exclusivamente **dados públicos**.
 - Obter os dados por meio do DataJud, preferencialmente com o pacote
   [`datajud`](https://github.com/ifusilva/datajud).
+- Coletar separadamente os dados do **TJSP**, **TJMT** e **TJSC**.
 - Registrar a data da extração, os parâmetros da consulta, os tribunais
   consultados e eventuais limitações de cobertura.
 - Não armazenar tokens, credenciais ou dados pessoais sensíveis no Git.
@@ -31,6 +32,7 @@ verificar se o pacote `datajud` e o acesso à API estão funcionando.
 
 ### Critérios de inclusão
 
+- processos pertencentes ao TJSP, TJMT ou TJSC;
 - data de ajuizamento igual ou posterior a **01/01/2022**;
 - classe processual correspondente a **procedimento comum cível**;
 - código de assunto **12495** da TPU/CNJ: fornecimento de medicamento não
@@ -103,38 +105,207 @@ o fim do período de observação e as limitações de acompanhamento.
 
 ## 7. Ferramentas
 
-- **Quarto** para organizar e publicar a análise reproduzível;
-- **R** como linguagem principal para análise estatística;
+- **Quarto** para produzir o relatório reproduzível, prioritariamente em PDF e,
+  quando útil para fins didáticos, também em HTML;
+- **R** como linguagem da coleta, do tratamento e da análise estatística;
 - `tidyverse` para importação, transformação e descrição dos dados;
 - `survival` e pacotes complementares para análise de sobrevivência;
 - pacotes apropriados para incidência cumulativa, riscos concorrentes e
   visualização;
-- **Python** para uma implementação paralela ou para tarefas de coleta e
-  tratamento em que ofereça vantagem prática.
+- `renv` para registrar e restaurar as dependências do projeto.
 
-As análises em R e Python deverão usar a mesma base tratada e definições
-equivalentes, permitindo comparar os resultados.
+## 8. Arquitetura dos dados e dos relatórios
 
-## 8. Estrutura reproduzível
+O projeto deverá separar coleta, tratamento e apresentação dos resultados.
 
-Manter, sempre que possível, a seguinte organização:
+### Estrutura de arquivos
 
 ```text
-dados/           dados públicos brutos e tratados
-R/               código e documentos Quarto em R
-python/          código e documentos Quarto em Python
-resultados/      tabelas, figuras e saídas geradas
-index.qmd        apresentação do projeto
-_quarto.yml      configuração do projeto Quarto
+R/
+  01_coletar_datajud.R   coleta retomável por tribunal
+  02_tratar_dados.R      construção integral da base analítica
+dados/
+  brutos/
+    tjsp/
+    tjmt/
+    tjsc/
+  tratados/
+    base_analitica.rds
+output/                  PDF e outros arquivos gerados
+relatorio.qmd            fonte principal do relatório Quarto
+referencias.bib          referências bibliográficas
+tema-moderno.tex         identidade visual portátil do PDF
+_quarto.yml              configuração do projeto Quarto
 ```
 
-Dados intermediários e resultados gerados devem ser recriáveis a partir dos
-scripts. Documentar dependências, versões e instruções de execução.
+O arquivo `relatorio.qmd` deverá permanecer na raiz. A pasta `output/` conterá
+somente arquivos gerados e poderá ser apagada e recriada sem perda do código-
+fonte.
+
+### Coleta
+
+A coleta utilizará dados públicos do DataJud para TJSP, TJMT e TJSC. Os dados
+brutos deverão ser armazenados separadamente por tribunal. A coleta deverá ser
+retomável: arquivos já concluídos não serão baixados novamente.
+
+A coleta não deverá ser executada automaticamente durante a renderização do
+relatório Quarto.
+
+### Tratamento da base
+
+Deverá existir um script R executável do início ao fim que transforme os dados
+brutos na base analítica consolidada.
+
+O script deverá:
+
+1. ler os dados dos três tribunais;
+2. documentar cada etapa por comentários objetivos;
+3. informar no console qual etapa está sendo executada;
+4. aplicar os critérios de inclusão e exclusão;
+5. padronizar datas, identificadores e nomes das variáveis;
+6. eliminar duplicidades;
+7. extrair os movimentos processuais necessários;
+8. construir as variáveis analíticas;
+9. preservar a identificação do tribunal;
+10. combinar os tribunais;
+11. executar verificações de consistência;
+12. salvar a base tratada em formato RDS.
+
+O script deverá produzir o mesmo banco quando executado novamente sobre os
+mesmos dados brutos. Não deverão existir transformações manuais indispensáveis
+à reprodução do resultado.
+
+#### Documentação do script de tratamento
+
+O arquivo `R/02_tratar_dados.R` deverá ser especialmente bem documentado e
+compreensível para quem não participou da construção da base. A documentação
+deverá explicar decisões e regras de negócio, e não apenas repetir em palavras
+o que cada comando R já mostra.
+
+O script deverá conter:
+
+- cabeçalho com objetivo, arquivos de entrada, arquivo de saída, dependências e
+  forma de execução;
+- seções numeradas que correspondam às etapas do tratamento;
+- descrição objetiva dos critérios de inclusão e exclusão antes de aplicá-los;
+- justificativa dos códigos de classes, assuntos e movimentos processuais;
+- explicação das regras usadas para eventos, censura e riscos concorrentes;
+- indicação da unidade de análise e das chaves utilizadas em junções;
+- explicação das variáveis analíticas criadas, incluindo tipo, unidade e
+  categorias esperadas;
+- mensagens de progresso no console, com número de registros antes e depois das
+  principais filtragens;
+- registro das exclusões por motivo, permitindo reconstruir o fluxo da amostra;
+- verificações explícitas de duplicidade, datas inválidas, valores ausentes,
+  ordem temporal impossível e consistência entre tribunais;
+- interrupção com mensagem informativa quando uma condição essencial não for
+  satisfeita;
+- resumo final com número de processos por tribunal, período e tipo de evento;
+- gravação da base somente depois que todas as verificações forem aprovadas.
+
+Comentários deverão ser atualizados junto com o código. Números derivados dos
+dados não deverão ser escritos manualmente nos comentários quando puderem ser
+calculados e exibidos pelo próprio script.
+
+### Relatório Quarto
+
+O relatório será escrito em QMD e utilizará chunks R executáveis. Ele deverá
+ler a base tratada e produzir diretamente as tabelas, estatísticas e figuras
+apresentadas.
+
+Os chunks deverão possuir:
+
+- rótulos informativos;
+- comentários quando a operação não for evidente;
+- código organizado em etapas;
+- resultados apresentados imediatamente após o cálculo correspondente;
+- ausência de caminhos absolutos dependentes de um computador específico.
+
+Por padrão, o código será mostrado no relatório didático. No HTML, deverá ser
+possível expandir e recolher os chunks. A decisão de ocultar o código em versões
+finais poderá ser tomada posteriormente sem eliminar o código-fonte do QMD.
+
+#### Apresentação e leitura dos modelos
+
+Cada método estatístico ou modelo utilizado deverá ser apresentado antes dos
+resultados e acompanhado de referência bibliográfica registrada em
+`referencias.bib`. O relatório não deverá mostrar apenas a saída do software.
+
+Para cada método ou modelo, o texto deverá informar:
+
+- qual pergunta ele responde e por que foi escolhido;
+- qual quantidade está sendo estimada;
+- como são definidos tempo, evento, censura e, quando aplicável, riscos
+  concorrentes;
+- quais são as principais hipóteses do método;
+- quais grupos, categorias ou valores constituem a referência;
+- como interpretar curvas, probabilidades, coeficientes, razões de risco,
+  intervalos de confiança e valores-p;
+- quais diagnósticos ou verificações foram realizados;
+- quais limitações impedem uma interpretação causal ou mais ampla.
+
+No mínimo, essa regra deverá ser aplicada a Kaplan-Meier, teste de log-rank,
+incidência cumulativa de Aalen-Johansen, teste de Gray, modelo de Cox e modelo
+de Fine-Gray, caso sejam utilizados. As diferenças entre risco instantâneo de
+causa específica, subdistribuição e probabilidade acumulada deverão ser
+explicadas em linguagem acessível.
+
+Cada tabela ou figura deverá ser introduzida no texto e seguida de uma leitura
+substantiva dos resultados. A interpretação deverá usar as unidades e o
+contexto jurídico do estudo, evitando limitar-se a afirmar significância
+estatística.
+
+### Desempenho
+
+A renderização não deverá repetir a coleta nem o tratamento completo dos dados.
+
+O fluxo esperado será:
+
+1. coletar ou atualizar os dados brutos;
+2. executar o script de tratamento;
+3. salvar a base consolidada;
+4. renderizar o relatório a partir da base tratada.
+
+Cálculos intermediários demorados deverão ser salvos quando isso não prejudicar
+a reprodutibilidade. A coleta deverá ser retomável, e o projeto Quarto poderá
+utilizar `freeze: auto` para reaproveitar resultados durante renderizações
+gerais.
+
+### Figuras e tabelas
+
+As figuras e tabelas principais deverão ser geradas pelos chunks do relatório.
+Não deverão ser substituídas por imagens criadas manualmente quando puderem ser
+reproduzidas pelo código.
+
+Arquivos de figuras poderão ser salvos quando forem necessários para outros
+formatos, apresentações ou divulgação, mas o código que os produz deverá
+permanecer no projeto.
+
+### Identidade visual
+
+O relatório deverá adotar identidade visual compatível com o livro
+*Jurimetria: Dados, Métodos e Evidência para o Direito*.
+
+O projeto terá seus próprios arquivos de estilo, derivados da paleta e da
+tipografia do livro, para permanecer portátil. O relatório não deverá depender
+de caminhos absolutos para arquivos localizados na pasta do livro.
+
+A identidade visual local usará:
+
+- azul-marinho `#071739` para títulos e elementos principais;
+- azul médio `#4B6382` para elementos secundários;
+- azul névoa `#A4B5C4` e cinza nuvem `#CDD5DB` para linhas e fundos leves;
+- marrom suave `#A68868` e bege `#E3C39D` para destaques;
+- marfim `#F8F5EF` e texto `#172033` como base neutra;
+- TeX Gyre Pagella para títulos e TeX Gyre Heros para o corpo do PDF.
+
+Gráficos produzidos em R deverão reutilizar essa paleta. A adaptação mínima para
+PDF ficará centralizada em `tema-moderno.tex`, sem dependência da pasta do livro.
 
 ## 9. Credenciais e segurança
 
 - O token do GitHub está no arquivo local `.env`.
-- Disponibilizar o token como variável de ambiente para R, Python e demais
+- Disponibilizar o token como variável de ambiente para R e demais
   ferramentas que precisarem dele.
 - No R, utilizar `.Renviron` com a variável `GITHUB_PAT`.
 - Manter `.env`, `.Renviron` e outros arquivos com credenciais fora do Git.
@@ -151,18 +322,21 @@ scripts. Documentar dependências, versões e instruções de execução.
 
 ## 11. Etapas de execução
 
-1. Configurar o projeto Quarto e os ambientes de R e Python.
+1. Configurar o projeto Quarto e o ambiente de R.
 2. Criar e configurar o repositório GitHub.
-3. Instalar e testar o pacote `datajud` com uma consulta mínima.
+3. Instalar e testar o pacote `datajud` com uma consulta mínima em cada um dos
+   três tribunais.
 4. Confirmar os códigos da classe e do assunto utilizados na consulta.
 5. Confirmar e documentar o marco temporal do Tema 1234 em fonte oficial.
 6. Definir e validar a regra de identificação da primeira decisão de tutela.
-7. Coletar os dados públicos e preservar os parâmetros da consulta.
-8. Limpar, deduplicar e construir a base analítica.
+7. Coletar de forma retomável os dados públicos do TJSP, TJMT e TJSC, mantendo
+   os arquivos brutos separados por tribunal.
+8. Executar o script integral de tratamento, deduplicar e construir a base RDS
+   consolidada.
 9. Classificar eventos, riscos concorrentes e censura.
 10. Executar as análises descritivas e de sobrevivência.
-11. Realizar análises de sensibilidade e comparar R e Python.
-12. Renderizar e revisar o relatório final no Quarto.
+11. Realizar análises de sensibilidade em R.
+12. Renderizar o relatório a partir da base tratada e revisar o PDF final.
 
 ## 12. Resultados esperados
 

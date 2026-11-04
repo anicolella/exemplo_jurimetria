@@ -1,32 +1,34 @@
 project:
-  type: website
-  output-dir: _site
+  type: default
+  output-dir: output
   render:
-    - index.qmd
-    - R/analise.qmd
-    - R/relatorio.qmd
-    - python/analise.qmd
+    - relatorio.qmd
 
-website:
-  title: "exemplo_jurimetria"
-  navbar:
-    left:
-      - href: index.qmd
-        text: Início
-      - href: R/analise.qmd
-        text: Análise em R
-      - href: R/relatorio.qmd
-        text: Relatório de sobrevivência
-      - href: python/analise.qmd
-        text: Análise em Python
+lang: pt-BR
+bibliography: referencias.bib
 
 format:
-  html:
-    theme: cosmo
-    css: styles.css
+  pdf:
+    documentclass: article
+    pdf-engine: xelatex
+    papersize: a4
+    geometry:
+      - top=22mm
+      - bottom=22mm
+      - left=24mm
+      - right=24mm
+    fontsize: 11pt
+    mainfont: "TeX Gyre Heros"
+    sansfont: "TeX Gyre Heros"
     toc: true
-    lang: pt-BR
+    number-sections: true
+    colorlinks: true
+    linkcolor: azul-marinho
+    urlcolor: azul-medio
+    citecolor: marrom-suave
+    include-in-header: tema-moderno.tex
 
 execute:
-  freeze: auto
+  echo: true
   warning: false
+  message: false
