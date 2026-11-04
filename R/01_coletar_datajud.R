@@ -13,24 +13,21 @@
 #   Rscript R/01_coletar_datajud.R --teste
 #
 # Decisões de implementação:
-#   1. a API é consultada diretamente com `httr`, pois a versão 0.1.0 do pacote
-#      `datajud` não oferece coleta retomável e suas funções paginadas não
-#      percorrem corretamente todas as páginas;
+#   1. a API é consultada por `datajud::search_slice()`, disponível na versão
+#      atualizada do pacote e capaz de rejeitar respostas incompletas;
 #   2. a chave pública padrão do pacote é usada quando `DATAJUD_API_KEY` não
 #      estiver definida; nenhuma chave é impressa ou salva;
 #   3. cada página bruta é salva como Parquet. Cada linha representa um hit e
 #      preserva seu conteúdo integral em JSON, além dos identificadores básicos;
-#   4. o manifesto registra o último valor de `search_after`, permitindo retomar
-#      a coleta sem baixar novamente páginas concluídas;
-#   5. a consulta usa ordenação estável por `numeroProcesso.keyword`. O sufixo
-#      `.keyword` é exigido pelo Elasticsearch para ordenar esse campo textual;
-#      o número processual é único dentro de cada tribunal e permite a retomada;
+#   4. o manifesto registra as fatias mensais concluídas, permitindo retomar a
+#      coleta sem repetir intervalos já validados;
+#   5. cada fatia usa `datajud::search_slice()`, que confere total, timeout e
+#      falhas de shards antes de devolver a resposta;
 #   6. a coleta e o tratamento permanecem separados: este script não transforma
 #      campos nem combina tribunais;
 #   7. o relatório Quarto nunca executará este arquivo automaticamente.
-#   8. não se solicita contagem exata global (`track_total_hits`), pois essa
-#      operação provocou timeout no TJSP; o manifesto registra a contagem local
-#      efetivamente coletada e o fim é identificado pela última página.
+#   8. a contagem exata ocorre apenas dentro de cada fatia mensal, reduzindo o
+#      custo que anteriormente provocava timeout na consulta global do TJSP.
 #
 # Saídas:
 #   dados/brutos/tjsp/pagina_000001.parquet e manifesto.json
@@ -41,24 +38,19 @@
 
 # 1. Configuração -------------------------------------------------------------
 
-pacotes_necessarios <- c("arrow", "datajud", "httr", "jsonlite")
+pacotes_necessarios <- c("arrow", "datajud", "jsonlite")
 
 tribunais <- c("TJSP", "TJMT", "TJSC")
 classe_codigo <- 7L
 assunto_codigo <- 12495L
-data_inicial <- "2022-01-01T00:00:00.000Z"
+data_inicial <- as.Date("2022-01-01")
+data_final <- Sys.Date()
 
-tamanho_pagina <- 1000L
-limite_registros <- 100000L
-limite_paginas <- 1000L
-pausa_entre_paginas <- 0.5
-timeout_segundos <- 120
-tentativas_por_pagina <- 3L
+tamanho_maximo_fatia <- 10000L
+pausa_entre_fatias <- 0.5
+tentativas_por_fatia <- 5L
 
 diretorio_bruto <- file.path("dados", "brutos")
-url_base <- "https://api-publica.datajud.cnj.jus.br"
-
-
 # 2. Funções de apoio ---------------------------------------------------------
 
 # Emite mensagens com horário para que uma coleta longa possa ser auditada.
@@ -120,74 +112,38 @@ obter_chave_api <- function() {
 # pelo pacote datajud para classe e assunto. O intervalo de ajuizamento começa
 # em 2022, exatamente como no tratamento, evitando baixar histórico que seria
 # posteriormente excluído e reduzindo o custo da consulta ao TJSP.
-montar_consulta <- function() {
+# Gera intervalos mensais fechados. Fatias menores reduzem timeouts e permitem
+# que `datajud::search_slice()` confirme que todos os hits foram devolvidos.
+gerar_fatias <- function(inicio = data_inicial, fim = data_final) {
+  inicios <- seq(as.Date(inicio), as.Date(fim), by = "month")
+  data.frame(
+    inicio = inicios,
+    fim = pmin(as.Date(fim), seq(as.Date(inicio), by = "month", length.out = length(inicios) + 1L)[-1L] - 1L)
+  )
+}
+
+montar_consulta <- function(inicio, fim) {
   list(
     bool = list(
       must = list(
         list(match = list("classe.codigo" = classe_codigo)),
         list(match = list("assuntos.codigo" = assunto_codigo)),
-        list(range = list(
-          dataAjuizamento = list(gte = data_inicial)
-        ))
+        datajud::date_range_query("dataAjuizamento", inicio, fim)
       )
     )
   )
 }
 
-# Converte a sigla humana (por exemplo, TJSP) no índice aceito pela API.
-montar_url <- function(tribunal) {
-  indice <- datajud::normalize_tribunal(tribunal)
-  paste0(url_base, "/", indice, "/_search")
-}
-
-# Executa uma página da consulta. `search_after` é enviado no corpo apenas a
-# partir da segunda página. `httr::RETRY` repete erros transitórios, enquanto
-# erros HTTP definitivos são apresentados sem revelar a chave da API.
-consultar_pagina <- function(
-    tribunal,
-    chave_api,
-    tamanho = tamanho_pagina,
-    search_after = NULL) {
-  corpo <- list(
-    query = montar_consulta(),
-    size = as.integer(tamanho),
-    sort = list(list(`numeroProcesso.keyword` = "asc")),
-    track_total_hits = FALSE
-  )
-
-  if (!is.null(search_after)) {
-    corpo$search_after <- search_after
-  }
-
-  resposta <- httr::RETRY(
-    verb = "POST",
-    url = montar_url(tribunal),
-    httr::add_headers(
-      Authorization = paste("APIKey", chave_api),
-      `Content-Type` = "application/json"
-    ),
-    body = jsonlite::toJSON(corpo, auto_unbox = TRUE, null = "null"),
-    encode = "raw",
-    httr::timeout(timeout_segundos),
-    times = tentativas_por_pagina,
-    pause_base = 1,
-    pause_cap = 8,
-    terminate_on = c(400, 401, 403, 404)
-  )
-
-  if (httr::http_error(resposta)) {
-    mensagem <- httr::content(resposta, as = "text", encoding = "UTF-8")
-    interromper(
-      paste0(
-        tribunal, ": API respondeu HTTP ", httr::status_code(resposta),
-        ". ", substr(mensagem, 1L, 500L)
-      )
-    )
-  }
-
-  jsonlite::fromJSON(
-    httr::content(resposta, as = "text", encoding = "UTF-8"),
-    simplifyVector = FALSE
+# Consulta uma fatia e exige resposta completa. A função atualizada do pacote
+# verifica timeout, shards com falha, total exato e quantidade de hits.
+consultar_fatia <- function(tribunal, chave_api, inicio, fim) {
+  datajud::search_slice(
+    tribunal = tribunal,
+    query = montar_consulta(inicio, fim),
+    max_size = tamanho_maximo_fatia,
+    parse = FALSE,
+    api_key = chave_api,
+    max_tries = tentativas_por_fatia
   )
 }
 
@@ -264,6 +220,12 @@ ler_ou_criar_manifesto <- function(tribunal, caminho) {
     if (!identical(manifesto$tribunal, tribunal)) {
       interromper(paste0("Manifesto incompatível em ", caminho, "."))
     }
+    # Uma nova execução em data posterior amplia a janela sem repetir as
+    # fatias já concluídas.
+    if (as.Date(manifesto$data_final) < data_final) {
+      manifesto$data_final <- as.character(data_final)
+      manifesto$estado <- "em_andamento"
+    }
     return(manifesto)
   }
 
@@ -272,12 +234,13 @@ ler_ou_criar_manifesto <- function(tribunal, caminho) {
     tribunal = tribunal,
     classe_codigo = classe_codigo,
     assunto_codigo = assunto_codigo,
-    data_inicial = data_inicial,
-    tamanho_pagina = tamanho_pagina,
+    data_inicial = as.character(data_inicial),
+    tamanho_maximo_fatia = tamanho_maximo_fatia,
+    data_final = as.character(data_final),
     estado = "em_andamento",
     paginas_concluidas = 0L,
     registros_coletados = 0L,
-    search_after = NULL,
+    fatias_concluidas = character(),
     iniciada_em_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
     atualizada_em_utc = format(Sys.time(), tz = "UTC", usetz = TRUE)
   )
@@ -289,8 +252,8 @@ validar_manifesto <- function(manifesto) {
   esperados <- list(
     classe_codigo = classe_codigo,
     assunto_codigo = assunto_codigo,
-    tamanho_pagina = tamanho_pagina,
-    data_inicial = data_inicial
+    tamanho_maximo_fatia = tamanho_maximo_fatia,
+    data_inicial = as.character(data_inicial)
   )
 
   for (campo in names(esperados)) {
@@ -315,8 +278,8 @@ validar_manifesto <- function(manifesto) {
 
 # 3. Coleta retomável ---------------------------------------------------------
 
-# Coleta um tribunal até esgotar resultados ou atingir os limites de segurança.
-# Ao retomar, começa na página seguinte e reutiliza o último `search_after`.
+# Coleta um tribunal por intervalos mensais completos. A retomada ignora as
+# fatias registradas no manifesto, inclusive meses sem resultados.
 coletar_tribunal <- function(tribunal, chave_api) {
   destino <- file.path(diretorio_bruto, tolower(tribunal))
   caminho_manifesto <- file.path(destino, "manifesto.json")
@@ -330,110 +293,57 @@ coletar_tribunal <- function(tribunal, chave_api) {
     return(manifesto)
   }
 
-  informar_etapa(
-    paste0(
-      tribunal, ": retomando após ", manifesto$paginas_concluidas,
-      " página(s) e ", manifesto$registros_coletados, " registro(s)."
-    )
-  )
+  fatias <- gerar_fatias(manifesto$data_inicial, manifesto$data_final)
+  concluidas <- unlist(manifesto$fatias_concluidas, use.names = FALSE)
 
-  repeat {
-    proxima_pagina <- as.integer(manifesto$paginas_concluidas) + 1L
-    if (proxima_pagina > limite_paginas ||
-        as.integer(manifesto$registros_coletados) >= limite_registros) {
-      manifesto$estado <- "limite_atingido"
-      salvar_manifesto(manifesto, caminho_manifesto)
-      informar_etapa(paste0(tribunal, ": limite de segurança atingido."))
-      break
-    }
+  for (i in seq_len(nrow(fatias))) {
+    rotulo <- paste(fatias$inicio[[i]], fatias$fim[[i]], sep = "_")
+    if (rotulo %in% concluidas) next
 
-    tamanho_solicitado <- min(
-      tamanho_pagina,
-      limite_registros - as.integer(manifesto$registros_coletados)
-    )
-    resposta <- consultar_pagina(
-      tribunal = tribunal,
-      chave_api = chave_api,
-      tamanho = tamanho_solicitado,
-      search_after = manifesto$search_after
+    resposta <- consultar_fatia(
+      tribunal, chave_api, fatias$inicio[[i]], fatias$fim[[i]]
     )
     hits <- resposta$hits$hits
 
-    if (is.null(hits) || length(hits) == 0L) {
-      manifesto$estado <- "completa"
-      manifesto$atualizada_em_utc <- format(Sys.time(), tz = "UTC", usetz = TRUE)
-      salvar_manifesto(manifesto, caminho_manifesto)
-      informar_etapa(paste0(tribunal, ": não há mais resultados; coleta completa."))
-      break
-    }
-
-    caminho_pagina <- file.path(
-      destino,
-      sprintf("pagina_%06d.parquet", proxima_pagina)
-    )
-    if (file.exists(caminho_pagina)) {
-      interromper(
-        paste0(
-          "A página ", caminho_pagina,
-          " já existe, mas não consta como concluída no manifesto."
-        )
+    if (length(hits) > 0L) {
+      proxima_pagina <- as.integer(manifesto$paginas_concluidas) + 1L
+      caminho_pagina <- file.path(
+        destino, sprintf("pagina_%06d.parquet", proxima_pagina)
       )
-    }
-
-    # Salva todos os hits brutos; o manifesto preserva os metadados operacionais.
-    pagina_parquet <- hits_para_parquet(hits, tribunal, proxima_pagina)
-    salvar_parquet_atomico(pagina_parquet, caminho_pagina)
-
-    ultimo_hit <- hits[[length(hits)]]
-    if (is.null(ultimo_hit$sort)) {
-      interromper(
-        paste0(tribunal, ": a API não devolveu `sort`; retomada inviável.")
+      if (file.exists(caminho_pagina)) {
+        interromper(paste0("Arquivo inesperado já existente: ", caminho_pagina))
+      }
+      salvar_parquet_atomico(
+        hits_para_parquet(hits, tribunal, proxima_pagina), caminho_pagina
       )
+      manifesto$paginas_concluidas <- proxima_pagina
+      manifesto$registros_coletados <-
+        as.integer(manifesto$registros_coletados) + length(hits)
     }
 
-    manifesto$paginas_concluidas <- proxima_pagina
-    manifesto$registros_coletados <-
-      as.integer(manifesto$registros_coletados) + length(hits)
-    manifesto$search_after <- ultimo_hit$sort
+    concluidas <- c(concluidas, rotulo)
+    manifesto$fatias_concluidas <- concluidas
     manifesto$atualizada_em_utc <- format(Sys.time(), tz = "UTC", usetz = TRUE)
-
-    # Uma página menor que o solicitado já é a última página.
-    if (length(hits) < tamanho_solicitado) {
-      manifesto$estado <- "completa"
-    }
     salvar_manifesto(manifesto, caminho_manifesto)
-
-    informar_etapa(
-      paste0(
-        tribunal, ": página ", proxima_pagina, " salva; total local = ",
-        manifesto$registros_coletados, "."
-      )
-    )
-
-    if (identical(manifesto$estado, "completa")) break
-    Sys.sleep(pausa_entre_paginas)
+    informar_etapa(paste0(tribunal, ": fatia ", rotulo, " concluída."))
+    Sys.sleep(pausa_entre_fatias)
   }
 
+  manifesto$estado <- "completa"
+  manifesto$atualizada_em_utc <- format(Sys.time(), tz = "UTC", usetz = TRUE)
+  salvar_manifesto(manifesto, caminho_manifesto)
   manifesto
 }
 
 
 # 4. Teste mínimo -------------------------------------------------------------
 
-# Consulta somente um registro e não grava arquivos. O teste verifica acesso,
-# filtros, estrutura da resposta e presença do campo `sort` usado na retomada.
+# Consulta uma única fatia diária e não grava arquivos. `search_slice()` valida
+# que a resposta é completa antes de devolvê-la.
 testar_tribunal <- function(tribunal, chave_api) {
-  resposta <- consultar_pagina(
-    tribunal = tribunal,
-    chave_api = chave_api,
-    tamanho = 1L
-  )
+  dia <- data_final - 1L
+  resposta <- consultar_fatia(tribunal, chave_api, dia, dia)
   hits <- resposta$hits$hits
-  possui_sort <- length(hits) == 0L || !is.null(hits[[1L]]$sort)
-
-  if (!possui_sort) {
-    interromper(paste0(tribunal, ": resposta sem o campo `sort`."))
-  }
 
   informar_etapa(
     paste0(

@@ -39,9 +39,8 @@
 #   9. em duplicidades, conserva-se o registro processual mais atualizado;
 #  10. nenhuma saída é salva quando uma verificação de consistência falha.
 #
-# Decisão ainda pendente:
-#   - preencher `fim_observacao` com a data efetiva e documentada de fechamento
-#     da coleta. O script para deliberadamente enquanto essa data for `NA`.
+# A censura administrativa é derivada dos manifestos: usa-se a menor data final
+# entre os tribunais para garantir uma janela comum de acompanhamento.
 # ==============================================================================
 
 # 1. Configuração -------------------------------------------------------------
@@ -95,8 +94,8 @@ codigos_riscos_concorrentes <- c(
 # partir desse marco; ela não substitui a data administrativa de censura.
 marco_tema_1234 <- as.POSIXct("2024-09-19 00:00:00", tz = "UTC")
 
-# Definir uma data fixa torna a censura administrativa reproduzível. Substituir
-# NA pela data efetiva de encerramento antes da primeira execução completa.
+# A data será obtida dos manifestos após a validação das entradas. Usa-se a
+# menor data final entre tribunais para garantir acompanhamento comum.
 fim_observacao <- as.POSIXct(NA, tz = "UTC")
 
 diretorio_bruto <- file.path("dados", "brutos")
@@ -180,13 +179,6 @@ verificar_configuracao <- function() {
     )
   }
 
-  if (is.na(fim_observacao)) {
-    interromper("Defina `fim_observacao` antes de executar o tratamento.")
-  }
-
-  if (fim_observacao < data_inicial) {
-    interromper("`fim_observacao` não pode ser anterior a `data_inicial`.")
-  }
 }
 
 # Confirma a existência das três coletas e de seus manifestos. O manifesto é
@@ -212,6 +204,23 @@ verificar_entradas <- function() {
       )
     )
   }
+}
+
+# Deriva a censura administrativa dos manifestos e adota a menor data final,
+# evitando que um tribunal tenha acompanhamento artificialmente mais longo.
+obter_fim_observacao <- function() {
+  caminhos <- file.path(
+    diretorio_bruto, tolower(tribunais), "manifesto.json"
+  )
+  datas <- vapply(caminhos, function(caminho) {
+    manifesto <- jsonlite::read_json(caminho, simplifyVector = TRUE)
+    as.character(manifesto$data_final)
+  }, character(1))
+  fim <- min(as.Date(datas))
+  if (is.na(fim) || fim < as.Date(data_inicial)) {
+    interromper("Data final inválida nos manifestos da coleta.")
+  }
+  as.POSIXct(paste(fim, "23:59:59"), tz = "UTC")
 }
 
 
@@ -242,21 +251,35 @@ movimentos_vazios <- function() {
 extrair_movimentos_hit <- function(hit, tribunal_esperado) {
   fonte <- hit[["_source"]]
   movimentos <- fonte[["movimentos"]]
+  id <- fonte[["id"]]
+  if (is.null(id)) id <- hit[["_id"]]
 
   if (is.null(movimentos) || length(movimentos) == 0L) {
     return(movimentos_vazios())
   }
 
+  texto_ou_na <- function(x) {
+    if (is.null(x) || length(x) == 0L) NA_character_ else as.character(x[[1L]])
+  }
+  inteiro_ou_na <- function(x) {
+    if (is.null(x) || length(x) == 0L) NA_integer_ else as.integer(x[[1L]])
+  }
+  data_ou_na <- function(x) {
+    if (is.null(x) || length(x) == 0L) {
+      as.POSIXct(NA, tz = "UTC")
+    } else {
+      lubridate::as_datetime(x[[1L]], tz = "UTC")
+    }
+  }
+
   purrr::map_dfr(movimentos, function(movimento) {
     tibble::tibble(
       tribunal = tribunal_esperado,
-      id = as.character(fonte[["id"]]),
-      numero_processo = as.character(fonte[["numeroProcesso"]]),
-      movimento_codigo = as.integer(movimento[["codigo"]]),
-      movimento_nome = as.character(movimento[["nome"]]),
-      movimento_data = lubridate::as_datetime(
-        movimento[["dataHora"]], tz = "UTC"
-      ),
+      id = texto_ou_na(id),
+      numero_processo = texto_ou_na(fonte[["numeroProcesso"]]),
+      movimento_codigo = inteiro_ou_na(movimento[["codigo"]]),
+      movimento_nome = texto_ou_na(movimento[["nome"]]),
+      movimento_data = data_ou_na(movimento[["dataHora"]]),
       complementos_json = as.character(
         jsonlite::toJSON(
           movimento[["complementosTabelados"]],
@@ -279,8 +302,8 @@ extrair_assuntos_hit <- function(hit) {
 
   purrr::map_dfr(assuntos, function(assunto) {
     tibble::tibble(
-      codigo = as.integer(assunto[["codigo"]]),
-      nome = as.character(assunto[["nome"]])
+      codigo = if (is.null(assunto[["codigo"]])) NA_integer_ else as.integer(assunto[["codigo"]][[1L]]),
+      nome = if (is.null(assunto[["nome"]])) NA_character_ else as.character(assunto[["nome"]][[1L]])
     )
   })
 }
@@ -293,20 +316,27 @@ extrair_processo_hit <- function(hit, tribunal_esperado) {
   id <- fonte[["id"]]
   if (is.null(id)) id <- hit[["_id"]]
 
+  texto_ou_na <- function(x) {
+    if (is.null(x) || length(x) == 0L) NA_character_ else as.character(x[[1L]])
+  }
+  inteiro_ou_na <- function(x) {
+    if (is.null(x) || length(x) == 0L) NA_integer_ else as.integer(x[[1L]])
+  }
+
   tibble::tibble(
     tribunal = tribunal_esperado,
-    id = as.character(id),
-    numero_processo = as.character(fonte[["numeroProcesso"]]),
-    grau = as.character(fonte[["grau"]]),
-    nivel_sigilo = as.integer(fonte[["nivelSigilo"]]),
+    id = texto_ou_na(id),
+    numero_processo = texto_ou_na(fonte[["numeroProcesso"]]),
+    grau = texto_ou_na(fonte[["grau"]]),
+    nivel_sigilo = inteiro_ou_na(fonte[["nivelSigilo"]]),
     data_ajuizamento = lubridate::as_datetime(
       fonte[["dataAjuizamento"]], tz = "UTC"
     ),
     data_atualizacao = lubridate::as_datetime(
       fonte[["dataHoraUltimaAtualizacao"]], tz = "UTC"
     ),
-    classe_tpu = as.integer(fonte[["classe"]][["codigo"]]),
-    classe_nome = as.character(fonte[["classe"]][["nome"]]),
+    classe_tpu = inteiro_ou_na(fonte[["classe"]][["codigo"]]),
+    classe_nome = texto_ou_na(fonte[["classe"]][["nome"]]),
     assuntos = list(extrair_assuntos_hit(hit))
   )
 }
@@ -458,6 +488,8 @@ aplicar_criterios <- function(processos) {
 construir_eventos <- function(processos, movimentos) {
   movimentos_interesse <- movimentos |>
     dplyr::filter(
+      !is.na(movimento_data),
+      movimento_data <= fim_observacao,
       movimento_codigo %in% c(
         codigos_evento_tutela,
         codigos_riscos_concorrentes
@@ -470,7 +502,12 @@ construir_eventos <- function(processos, movimentos) {
         "risco_concorrente"
       )
     ) |>
-    dplyr::arrange(tribunal, id, movimento_data) |>
+    # Em empate temporal, tutela precede risco concorrente. A regra é
+    # determinística e conservadora quanto à observação da decisão de tutela.
+    dplyr::arrange(
+      tribunal, id, movimento_data,
+      dplyr::desc(tipo_evento == "tutela"), movimento_codigo
+    ) |>
     dplyr::group_by(tribunal, id) |>
     dplyr::slice_head(n = 1L) |>
     dplyr::ungroup() |>
@@ -569,6 +606,8 @@ informar_etapa(1, "Verificando dependências e configuração.")
 verificar_pacotes(pacotes_necessarios)
 verificar_configuracao()
 verificar_entradas()
+fim_observacao <- obter_fim_observacao()
+message("  Fim comum da observação: ", format(fim_observacao, tz = "UTC"), ".")
 
 informar_etapa(2, "Lendo as coletas completas dos três tribunais.")
 bases_por_tribunal <- stats::setNames(lapply(tribunais, ler_tribunal), tribunais)
