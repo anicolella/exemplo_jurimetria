@@ -42,11 +42,30 @@ classe_codigo <- 7L
 assunto_codigo <- 12495L
 data_inicial <- as.POSIXct("2022-01-01 00:00:00", tz = "UTC")
 
-# PREENCHER somente depois da validação jurídica e empírica dos movimentos.
-# Enquanto esses vetores estiverem vazios, o script interromperá antes de ler os
-# dados para evitar a criação silenciosa de uma base analítica incorreta.
-codigos_evento_tutela <- integer()
-codigos_riscos_concorrentes <- integer()
+# Códigos da Tabela Processual Unificada (TPU/CNJ). A classificação abaixo
+# deve ser confrontada com os nomes observados na amostra antes da coleta
+# completa, pois a qualidade do preenchimento pode variar entre tribunais.
+#
+# Evento de interesse: concessão, concessão parcial ou não concessão de tutela
+# provisória/liminar. O desfecho mede a primeira decisão sobre tutela, qualquer
+# que seja o seu resultado; análises por resultado poderão ser acrescentadas
+# depois, preservando o código original do movimento.
+codigos_evento_tutela <- c(332L, 339L, 785L, 792L, 889L, 892L)
+
+# Riscos concorrentes: encerramentos que impedem a observação posterior de uma
+# decisão de tutela no processo. Incluem acordo/transação, cancelamento da
+# distribuição e extinção sem resolução do mérito. Movimentos de suspensão,
+# como os códigos 268 e 11013, não são eventos terminais e foram excluídos.
+codigos_riscos_concorrentes <- c(
+  83L, 218L, 454L, 456L, 458L, 459L, 460L, 461L, 462L, 463L, 464L,
+  466L, 488L, 11376L, 11378L, 11379L, 11380L, 11381L, 12256L, 12325L,
+  14848L, 15238L
+)
+
+# Marco temporal principal: publicação da ata do julgamento de mérito do Tema
+# 1234 no DJE. A variável de período compara processos ajuizados antes e a
+# partir desse marco; ela não substitui a data administrativa de censura.
+marco_tema_1234 <- as.POSIXct("2024-09-19 00:00:00", tz = "UTC")
 
 # Definir uma data fixa torna a censura administrativa reproduzível. Substituir
 # NA pela data efetiva de encerramento antes da primeira execução completa.
@@ -336,6 +355,11 @@ construir_eventos <- function(processos, movimentos) {
         tipo_evento == "tutela" ~ 1L,
         tipo_evento == "risco_concorrente" ~ 2L,
         TRUE ~ 0L
+      ),
+      periodo_tema_1234 = dplyr::if_else(
+        data_ajuizamento < marco_tema_1234,
+        "antes",
+        "depois"
       ),
       data_final = dplyr::coalesce(data_evento, fim_observacao),
       tempo_dias = as.numeric(
